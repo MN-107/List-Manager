@@ -100,6 +100,8 @@ static void TestParseBasic() {
     CHECK(lists.size() == 2);
     CHECK((lists[0].items == std::vector<std::wstring>{L"яблоко", L"банан"}));
     CHECK((lists[1].items == std::vector<std::wstring>{L"кошка", L"собака"}));
+    CHECK(lists[0].comments.size() == 2);
+    CHECK(lists[0].comments[0].empty());
 }
 
 static void TestParseCrLf() {
@@ -304,6 +306,52 @@ static void TestSwapRows() {
     CHECK((st.tags[1].indices == std::vector<int>{2}));
 }
 
+static void TestParseComments() {
+    std::string content =
+        "[LIST1]\n"
+        "яблоко\n"
+        "банан\n"
+        "вишня\n"
+        "[COMMENTS1]\n"
+        "1:любимый\n"
+        "0:сорт: антоновка\n"
+        "[LIST2]\n"
+        "кошка\n"
+        "[COMMENTS2]\n"
+        "0:домашняя\n";
+    std::vector<ListStore> lists;
+    ParseLists(content, lists);
+    CHECK(lists.size() == 2);
+    CHECK(lists[0].comments.size() == 3);
+    CHECK(lists[0].comments[1] == L"любимый");
+    CHECK(lists[0].comments[0] == L"сорт: антоновка");
+    CHECK(lists[0].comments[2].empty());
+    CHECK(lists[1].comments.size() == 1);
+    CHECK(lists[1].comments[0] == L"домашняя");
+}
+
+static void TestCommentSuffix() {
+    ListStore st;
+    st.items = {L"a", L"b", L"c"};
+    st.comments = {L"", L"note one", L""};
+    CHECK(CommentSuffix(st, 0) == L"");
+    CHECK(CommentSuffix(st, 1) == L"  // note one");
+    CHECK(CommentSuffix(st, 2) == L"");
+}
+
+static void TestSwapRowsComments() {
+    ListStore st;
+    st.items = {L"a", L"b", L"c"};
+    st.comments = {L"ca", L"cb", L""};
+    st.tags = { {L"x", {1}} };
+    SwapRows(st, 0, 1);
+    CHECK(st.comments[0] == L"cb");
+    CHECK(st.comments[1] == L"ca");
+    SwapRows(st, 1, 2);
+    CHECK(st.comments[2] == L"ca");
+    CHECK(st.comments[1].empty());
+}
+
 static void TestWriteReport() {
     ListStore st;
     st.items = {L"яблоко", L"банан", L"вишня"};
@@ -338,6 +386,9 @@ TestSaveFormatMatchesParser();
     TestTagSuffix();
     TestSwapRows();
     TestWriteReport();
+    TestParseComments();
+    TestCommentSuffix();
+    TestSwapRowsComments();
 
     std::cout << (failures == 0 ? "OK  " : "FAIL") << " "
               << checks - failures << "/" << checks << " passed\n";

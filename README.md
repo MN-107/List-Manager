@@ -22,6 +22,10 @@ Application only:
 g++ -O2 -municode -mwindows list_manager.cpp -o list_manager.exe -static -luser32 -lgdi32
 ```
 
+## Usage
+
+Sheets are shown two at a time; use `<` / `>` to flip pages. `add list` / `del list` manage sheets. Inside a sheet: `add`, `edit`, `delete`, `rename` (sheet name), `tag`, `up` / `down`, and `comment` — a free-form note per item (up to 1024 characters). The window has a fixed 880×480 client size.
+
 ## Files
 
 `save` writes `saves/<name>.list` next to the executable, `save txt` writes `saves/<name>.txt`, `load` reads any `.list` from there. The `saves/` folder is created on first run and is git-ignored, so a fresh clone has none of your data in it.
@@ -36,17 +40,20 @@ milk
 bread
 [TAGS1]
 fridge:0
+[COMMENTS1]
+0:2%
 ```
 
 - `[TITLEn]` — sheet name
 - `[LISTn]` — items, one per line
 - `[TAGSn]` — optional, `name:index[,index]`, index is a number or a range (`0-3,5`)
+- `[COMMENTSn]` — optional, `index:text`, a note attached to one item
 
-`save txt` flattens the same data, tags inlined into each line:
+`save txt` flattens the same data, tags and comments inlined into each line:
 
 ```
 groceries
-milk (fridge)
+milk (fridge)  // 2%
 bread
 ```
 
@@ -80,11 +87,15 @@ cd List-Manager
 g++ -O2 -municode -mwindows list_manager.cpp -o list_manager.exe -static -luser32 -lgdi32
 ```
 
+## Использование
+
+Листы показываются по два за раз; `<` / `>` листают страницы. `add list` / `del list` управляют листами. Внутри листа: `add`, `edit`, `delete`, `rename` (имя листа), `tag`, `up` / `down` и `comment` — произвольная заметка к пункту (до 1024 символов). Размер окна фиксирован — 880×480 по клиентской области.
+
 ## Файлы
 
-`save` пишет `saves/<имя>.list` рядом с исполняемым файлом, `save txt` — `saves/<имя>.txt`, `load` читает любой `.list` оттуда. Папка `saves` создаётся при первом запуске и игнорируется git, так что в свежем клоне ваших данных в ней нет.
+`save` пишет `saves/<name>.list` рядом с исполняемым файлом, `save txt` пишет `saves/<name>.txt`, `load` читает любой `.list` оттуда. Папка `saves/` создаётся при первом запуске и игнорируется git, поэтому в свежем клоне ваших данных в ней нет.
 
-Везде UTF-8, индексы с нуля, диапазоны включачительные:
+Везде UTF-8, нумерация с нуля, диапазоны включительные:
 
 ```
 [TITLE1]
@@ -94,17 +105,20 @@ milk
 bread
 [TAGS1]
 fridge:0
+[COMMENTS1]
+0:2%
 ```
 
 - `[TITLEn]` — имя листа
 - `[LISTn]` — пункты, по одному в строке
 - `[TAGSn]` — необязательно, `имя:индекс[,индекс]`, индекс — число или диапазон (`0-3,5`)
+- `[COMMENTSn]` — необязательно, `индекс:текст`, заметка к пункту
 
-`save txt` пишет те же данные плоско, теги встроены в строку пункта:
+`save txt` пишет те же данные плоско, теги и заметки встроены в строку пункта:
 
 ```
 groceries
-milk (fridge)
+milk (fridge)  // 2%
 bread
 ```
 

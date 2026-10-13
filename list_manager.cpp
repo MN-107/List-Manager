@@ -27,9 +27,9 @@ enum {
 // dynamic per-panel controls: PANEL_BASE + index*10 + kind
 const int PANEL_BASE = 2000;
 const int PK_ADD = 0, PK_EDIT = 1, PK_DEL = 2, PK_RENAME = 3,
-          PK_TAG = 4, PK_UP = 5, PK_DOWN = 6, PK_LIST = 7;
+          PK_TAG = 4, PK_UP = 5, PK_DOWN = 6, PK_LIST = 7, PK_COMMENT = 8;
 const int PANEL_KINDS = 10;
-const int PANEL_CTRLS = 9;      // group, list, add, edit, del, rename, tag, up, down
+const int PANEL_CTRLS = 10;     // group, list, add, edit, del, rename, tag, up, down, comment
 
 static HWND gMain = NULL;
 static HWND gFilesWnd = NULL;
@@ -39,6 +39,8 @@ static HWND hPagePrev = NULL, hPageNext = NULL, hPageLabel = NULL;
 static HWND hInputDialog = NULL, hInputEdit = NULL;
 static BOOL gInputFinished = FALSE;
 static BOOL gInputOk = FALSE;
+static BOOL gInputAllowEmpty = FALSE;
+static BOOL gInputMultiline = FALSE;
 static std::wstring gInputText;
 static std::wstring gSavesDir;
 
@@ -49,6 +51,7 @@ struct Tag {
 };
 struct ListStore {
     std::vector<std::wstring> items;
+    std::vector<std::wstring> comments;   // parallel to items; empty = no note
     std::vector<Tag> tags;
     std::wstring title;      // empty until the user names the sheet
 };
@@ -57,7 +60,7 @@ struct Panel {
     int idBase = 0;
     HWND group = NULL, list = NULL, btnAdd = NULL;
     HWND btnEdit = NULL, btnDel = NULL, btnRename = NULL, btnTag = NULL;
-    HWND btnUp = NULL, btnDown = NULL;
+    HWND btnUp = NULL, btnDown = NULL, btnComment = NULL;
 };
 static std::vector<Panel> gPanels;
 static int gPage = 0;                 // one page shows two sheets
@@ -168,16 +171,24 @@ static LRESULT CALLBACK InputDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
     switch (msg) {
     case WM_CREATE: {
         HINSTANCE hInst = GetModuleHandleW(NULL);
+        DWORD es = gInputMultiline ? (ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN)
+                                   : (ES_AUTOHSCROLL);
+        int eh = gInputMultiline ? S(84) : S(24);
         hInputEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-            S(10), S(14), S(304), S(24), hwnd, (HMENU)(INT_PTR)ID_INPUT_TEXT, hInst, NULL);
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | es | WS_VSCROLL,
+            S(10), S(14), S(304), eh, hwnd, (HMENU)(INT_PTR)ID_INPUT_TEXT, hInst, NULL);
+        int btnY = gInputMultiline ? S(110) : S(54);
         CreateWindowW(L"BUTTON", L"ok",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
-            S(160), S(54), S(80), S(28), hwnd, (HMENU)(INT_PTR)ID_OK, hInst, NULL);
+            S(160), btnY, S(80), S(28), hwnd, (HMENU)(INT_PTR)ID_OK, hInst, NULL);
         CreateWindowW(L"BUTTON", L"cancel",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-            S(250), S(54), S(80), S(28), hwnd, (HMENU)(INT_PTR)ID_CANCEL, hInst, NULL);
+            S(250), btnY, S(80), S(28), hwnd, (HMENU)(INT_PTR)ID_CANCEL, hInst, NULL);
         SetChildFont(hwnd, gFont ? gFont : (HFONT)GetStockObject(DEFAULT_GUI_FONT));
+        if (gInputMultiline) {
+            SendMessageW(hInputEdit, EM_LIMITTEXT, (WPARAM)1024, 0);
+            // optionally make it wrap? keep as is
+        }
         return 0;
     }
     case WM_COMMAND:
@@ -187,10 +198,16 @@ static LRESULT CALLBACK InputDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
             std::vector<wchar_t> buf(len + 1);
             GetWindowTextW(hInputEdit, buf.data(), len + 1);
             std::wstring s(buf.data());
-            while (!s.empty() && (s.back() == L'\r' || s.back() == L'\n' ||
-                                  s.back() == L' ' || s.back() == L'\t'))
+            // trim trailing whitespace/newlines
+            while (!s.empty() && (s.back() == L' ' || s.back() == L'\t'))
                 s.pop_back();
-            if (!s.empty()) {
+            if (!gInputMultiline) {
+                while (!s.empty() && (s.back() == L'\r' || s.back() == L'\n'))
+                    s.pop_back();
+            }
+            if (gInputMultiline && (int)s.size() > 1024)
+                s.resize(1024);
+            if (!s.empty() || gInputAllowEmpty) {
                 gInputText = s;
                 gInputOk = TRUE;
                 gInputFinished = TRUE;
@@ -211,14 +228,17 @@ static LRESULT CALLBACK InputDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
-static bool ShowInputDialog(HWND owner, const wchar_t* title, const std::wstring& initial) {
+static bool ShowInputDialog(HWND owner, const wchar_t* title, const std::wstring& initial,
+                            bool allowEmpty = false, bool multiline = false) {
     gInputFinished = FALSE;
     gInputOk = FALSE;
+    gInputAllowEmpty = allowEmpty ? TRUE : FALSE;
+    gInputMultiline = multiline ? TRUE : FALSE;
     gInputText.clear();
 
     HINSTANCE hInst = GetModuleHandleW(NULL);
     DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
-    RECT dr = { 0, 0, S(340), S(104) };
+    RECT dr = { 0, 0, S(340), gInputMultiline ? S(160) : S(104) };
     AdjustWindowRectEx(&dr, style, FALSE, WS_EX_DLGMODALFRAME);
     int dw = dr.right - dr.left, dh = dr.bottom - dr.top;
 
@@ -292,11 +312,12 @@ static int PanelIndex(const Panel& p) {
     return -1;
 }
 
-// group, list, add, edit, del, rename, tag, up, down
+// group, list, add, edit, del, rename, tag, up, down, comment
 static void PanelControls(const Panel& p, HWND* out) {
     out[0] = p.group;   out[1] = p.list;     out[2] = p.btnAdd;
     out[3] = p.btnEdit; out[4] = p.btnDel;   out[5] = p.btnRename;
     out[6] = p.btnTag;  out[7] = p.btnUp;    out[8] = p.btnDown;
+    out[9] = p.btnComment;
 }
 
 static Panel* PanelFromCtrl(HWND ctrl) {
@@ -324,7 +345,8 @@ static void ApplyCaption(Panel& p, int index) {
 
 // only a named or a non-empty sheet is worth writing to disk
 static bool SheetWorthSaving(const Panel& p) {
-    return !p.store.title.empty() || !p.store.items.empty() || !p.store.tags.empty();
+    return !p.store.title.empty() || !p.store.items.empty() ||
+           !p.store.tags.empty() || !p.store.comments.empty();
 }
 
 static void RefreshPageNav() {
@@ -366,6 +388,7 @@ static void RefreshButtons() {
         EnableWindow(p.btnEdit, sel >= 0);
         EnableWindow(p.btnDel, sel >= 0);
         EnableWindow(p.btnTag, sel >= 0);
+        EnableWindow(p.btnComment, sel >= 0);
         EnableWindow(p.btnUp, sel > 0);
         EnableWindow(p.btnDown, sel >= 0 && sel < cnt - 1);
     }
@@ -383,6 +406,12 @@ static std::wstring TagSuffix(const ListStore& st, int index) {
         }
     }
     return s.empty() ? L"" : L" (" + s + L")";
+}
+
+static std::wstring CommentSuffix(const ListStore& st, int index) {
+    if (index < 0 || index >= (int)st.comments.size() || st.comments[index].empty())
+        return L"";
+    return L"  // " + st.comments[index];
 }
 
 static std::vector<int> ParseIndexList(const std::wstring& s, size_t limit) {
@@ -445,7 +474,8 @@ static void RebuildList(Panel& p) {
     SendMessageW(p.list, LB_RESETCONTENT, 0, 0);
     for (size_t i = 0; i < p.store.items.size(); i++)
         SendMessageW(p.list, LB_ADDSTRING, 0,
-            (LPARAM)(p.store.items[i] + TagSuffix(p.store, (int)i)).c_str());
+            (LPARAM)(p.store.items[i] + TagSuffix(p.store, (int)i) +
+                     CommentSuffix(p.store, (int)i)).c_str());
     int cnt = (int)SendMessageW(p.list, LB_GETCOUNT, 0, 0);
     if (cnt > 0) {
         if (sel >= cnt) sel = cnt - 1;
@@ -459,6 +489,7 @@ static void RebuildList(Panel& p) {
 static void OnAdd(Panel& p) {
     if (ShowInputDialog(gMain, L"add", L"")) {
         p.store.items.push_back(gInputText);
+        p.store.comments.push_back(L"");
         RebuildList(p);
         SendMessageW(p.list, LB_SETCURSEL, (int)p.store.items.size() - 1, 0);
         RefreshButtons();
@@ -474,10 +505,26 @@ static void OnEdit(Panel& p) {
     }
 }
 
+static void OnComment(Panel& p) {
+    int i = CurSel(p.list);
+    if (i < 0) { MessageBeep(MB_ICONWARNING); return; }
+    std::wstring initial = (i < (int)p.store.comments.size()) ? p.store.comments[i] : L"";
+    // empty input is allowed so a note can be cleared; use multiline with 1024 char limit
+    if (ShowInputDialog(gMain, L"comment", initial, true, true)) {
+        if ((int)p.store.comments.size() <= i) p.store.comments.resize(i + 1);
+        // truncate to 1024 if somehow longer
+        if ((int)gInputText.size() > 1024) gInputText.resize(1024);
+        p.store.comments[i] = gInputText;
+        RebuildList(p);
+    }
+}
+
 static void OnDelete(Panel& p) {
     int i = CurSel(p.list);
     if (i < 0) return;
     p.store.items.erase(p.store.items.begin() + i);
+    if (i < (int)p.store.comments.size())
+        p.store.comments.erase(p.store.comments.begin() + i);
     for (auto& t : p.store.tags) {
         std::vector<int> ni;
         for (int idx : t.indices) {
@@ -504,6 +551,8 @@ static std::wstring TrimTagName(const std::wstring& in) {
 
 static void SwapRows(ListStore& st, int i, int j) {
     std::swap(st.items[i], st.items[j]);
+    if (i < (int)st.comments.size() && j < (int)st.comments.size())
+        std::swap(st.comments[i], st.comments[j]);
     for (auto& t : st.tags) {
         for (auto& idx : t.indices) {
             if (idx == i) idx = j;
@@ -642,6 +691,13 @@ static void OnSave(HWND owner) {
             f << "[TAGS" << (i + 1) << "]\n";
             WriteTags(f, p.store);
         }
+        if (std::any_of(p.store.comments.begin(), p.store.comments.end(),
+                        [](const std::wstring& c) { return !c.empty(); })) {
+            f << "[COMMENTS" << (i + 1) << "]\n";
+            for (size_t k = 0; k < p.store.comments.size() && k < p.store.items.size(); k++)
+                if (!p.store.comments[k].empty())
+                    f << k << ":" << ToUtf8(p.store.comments[k]) << "\n";
+        }
     }
 
     if (gFilesWnd) {
@@ -654,7 +710,8 @@ static void OnSave(HWND owner) {
 static void WriteReport(std::ostream& f, const std::wstring& title, const ListStore& st) {
     f << ToUtf8(title) << "\n";
     for (size_t i = 0; i < st.items.size(); i++)
-        f << ToUtf8(st.items[i] + TagSuffix(st, (int)i)) << "\n";
+        f << ToUtf8(st.items[i] + TagSuffix(st, (int)i) +
+                    CommentSuffix(st, (int)i)) << "\n";
 }
 
 static void OnSaveTxt(HWND owner) {
@@ -689,6 +746,19 @@ static void OnSaveTxt(HWND owner) {
         WriteReport(f, PanelCaption(p, (int)i), p.store);
         first = false;
     }
+}
+
+static void ParseCommentLine(const std::string& line, ListStore& st) {
+    size_t p = line.find(':');
+    if (p == std::string::npos || p == 0) return;
+    int idx = 0;
+    for (size_t j = 0; j < p; j++) {
+        int d = line[j] - '0';
+        if (d < 0 || d > 9) return;
+        idx = idx * 10 + d;
+    }
+    if ((int)st.comments.size() <= idx) st.comments.resize(idx + 1);
+    st.comments[idx] = FromUtf8(line.substr(p + 1));
 }
 
 static void ParseTagLine(const std::string& line, std::vector<Tag>& out, size_t limit) {
@@ -729,6 +799,7 @@ static void ParseLists(const std::string& content, std::vector<ListStore>& lists
             if (idx >= 0 && pre == "LIST")  { mode = 1; }
             else if (idx >= 0 && pre == "TITLE") { mode = 2; }
             else if (idx >= 0 && pre == "TAGS")  { mode = 3; }
+            else if (idx >= 0 && pre == "COMMENTS") { mode = 4; }
             else { cur = -1; continue; }
             cur = idx;
             while ((int)lists.size() <= idx) lists.push_back(ListStore());
@@ -740,7 +811,11 @@ static void ParseLists(const std::string& content, std::vector<ListStore>& lists
             lists[cur].title = FromUtf8(line);
         else if (mode == 3 && cur >= 0 && cur < (int)lists.size())
             ParseTagLine(line, lists[cur].tags, lists[cur].items.size());
+        else if (mode == 4 && cur >= 0 && cur < (int)lists.size())
+            ParseCommentLine(line, lists[cur]);
     }
+    // keep the note vector in step with the items (older save files lack it)
+    for (auto& l : lists) l.comments.resize(l.items.size());
 }
 
 static bool LoadFile(HWND owner, const std::wstring& path, std::vector<ListStore>& lists) {
@@ -860,11 +935,11 @@ static void OpenFilesWindow() {
 // All metrics below are design units (96dpi). Sheets are shown two at a time as
 // a page inside gView (the viewport), which clips them to the area between the
 // window edges and the tool bar, so no sheet can ever paint over the buttons.
-static const int PANEL_DX = 10;      // left margin of a panel
+static const int PANEL_DX = 20;      // left margin of a panel
 static const int PANEL_DY = 8;       // top margin of a panel
 static const int PANEL_W = 370;
 static const int PANEL_H = 348;
-static const int PANEL_COL_PITCH = 392;
+static const int PANEL_COL_PITCH = 470;
 
 static const int LIST_DX = 10, LIST_DY = 22, LIST_W = 235, LIST_H = 288;
 
@@ -878,7 +953,7 @@ static const int PAGE_BTN_W = 44, PAGE_BTN_H = 26, PAGE_LBL_W = 150, PAGE_GAP = 
 
 static const int TOOL_H = 44;
 static const int TOOL_BTN_W = 110, TOOL_BTN_H = 28;
-static const int TOOL_DX = 8, TOOL_PITCH = 116, TOOL_BOT = 8;
+static const int TOOL_DX = 20, TOOL_PITCH = 182, TOOL_BOT = 8;
 
 // A page switch leaves the pixels of the sheets that just went away on screen: a
 // group box only repaints its own frame and caption, so the leftovers of the old
@@ -935,6 +1010,7 @@ static void LayoutPanels() {
             { x + S(BTN_DX), y + S(BTN_DY + 4 * BTN_PITCH), S(BTN_W), S(BTN_H) },
             { x + S(NAV_DX1), y + S(NAV_DY), S(NAV_W1), S(NAV_H) },
             { x + S(NAV_DX2), y + S(NAV_DY), S(NAV_W2), S(NAV_H) },
+            { x + S(BTN_DX), y + S(BTN_DY + 5 * BTN_PITCH), S(BTN_W), S(BTN_H) },
         };
         HWND hs[PANEL_CTRLS];
         PanelControls(p, hs);
@@ -1023,6 +1099,9 @@ static void AddPanel(HWND parent) {
     p.btnDown = CreateWindowW(L"BUTTON", L"down",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, S(NAV_W2), S(NAV_H), host,
         (HMENU)(INT_PTR)(base + PK_DOWN), hInst, NULL);
+    p.btnComment = CreateWindowW(L"BUTTON", L"comment",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, S(BTN_W), S(BTN_H), host,
+        (HMENU)(INT_PTR)(base + PK_COMMENT), hInst, NULL);
 
     SetChildFont(host, gFont);
     gPanels.push_back(std::move(p));
@@ -1137,8 +1216,13 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
     }
     case WM_GETMINMAXINFO: {
         MINMAXINFO* mmi = (MINMAXINFO*)lParam;
-        mmi->ptMinTrackSize.x = S(PANEL_DX) + S(PANEL_COL_PITCH) + S(PANEL_W);
-        mmi->ptMinTrackSize.y = S(PAGEBAR_H) + S(PANEL_DY) + S(PANEL_H) + S(TOOL_H);
+        // fixed 880x480 client area; the track size (incl. the frame) is
+        // clamped so the window can be neither resized nor maximized
+        RECT fixed = { 0, 0, S(880), S(480) };
+        AdjustWindowRectEx(&fixed, WS_OVERLAPPEDWINDOW, FALSE, 0);
+        mmi->ptMinTrackSize.x = fixed.right - fixed.left;
+        mmi->ptMinTrackSize.y = fixed.bottom - fixed.top;
+        mmi->ptMaxTrackSize = mmi->ptMinTrackSize;
         return 0;
     }
     case WM_DPICHANGED: {
@@ -1170,6 +1254,7 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 case PK_TAG:    OnTag(*p); break;
                 case PK_UP:     OnMove(*p, -1); break;
                 case PK_DOWN:   OnMove(*p, 1); break;
+                case PK_COMMENT: OnComment(*p); break;
                 }
             }
         } else {
@@ -1239,7 +1324,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int) {
     CreateAppFont();
 
     DWORD wstyle = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN;
-    RECT rc = { 0, 0, S(800), S(480) };
+    RECT rc = { 0, 0, S(880), S(480) };
     AdjustWindowRectEx(&rc, wstyle, FALSE, 0);
 
     gMain = CreateWindowW(L"ListAppMain", L"list_manager",
